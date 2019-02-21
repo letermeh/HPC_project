@@ -20,16 +20,18 @@
 
 #include <string.h>
 
-static long N = 10000; // Number of examples
-static long P = 10; // Number of dimensions (<< N)
-static long K = 20; // Number of clusters (<< N)
+static long N = 1000; // Number of examples
+static long P = 2; // Number of dimensions (<< N)
+static long K = 3; // Number of clusters (<< N)
 
 static double CONV_CRIT = 0.00005; // Convergence criterion (<< 1)
 static int NTHREADS = 4; // Number of threads
 
-static char* DATA_FILE = "../dataset/data_n10000_p10_k20_covscale0.20_emax-1.00.csv";
-static char* PI_FILE = "../dataset/pi_n10000_p10_k20_covscale0.20_emax-1.00.csv";
-static char* CHOICES_FILE = "../dataset/choices_n10000_p10_k20_covscale0.20_emax-1.00.csv";
+static double EPSILON = 0.001; // Quantity to add to the diagonal of the covariance matrices to avoid degenerated matrices
+
+static char* DATA_FILE = "../dataset/data_n1000_p2_k3_covscale0.0010_emax0.90.csv";
+static char* PI_FILE = "../dataset/pi_n1000_p2_k3_covscale0.0010_emax0.90.csv";
+static char* CHOICES_FILE = "../dataset/choices_n1000_p2_k3_covscale0.0010_emax0.90.csv";
 
 static long MAX_SIZE = 524288;
 static char* DELIM = ";";
@@ -168,9 +170,11 @@ int main()
     double *run_time_init = malloc(sizeof(double));
     double *run_time_em = malloc(sizeof(double));
 
-    // Run parallel EM algorithm
-    double loglik = em_parallel(data, pi, mu, sigma, gamma, niter, run_time_init, run_time_em);
+////////////////////////////////////////////////////////////////////////////////
+// Run parallel EM algorithm
+////////////////////////////////////////////////////////////////////////////////
 
+    double loglik = em_parallel(data, pi, mu, sigma, gamma, niter, run_time_init, run_time_em);
     printf("EM algorithm with %u threads performed in %.0f seconds and %u iterations.\n", NTHREADS, *run_time_init + *run_time_em, *niter);
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -243,27 +247,32 @@ double em_parallel (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_ma
   for (long k=0; k<K; k++){
     pi[k] = pi0;
   }
+  printf("Initialization of pi:\nEx.: pi[2] = %.2f\n\n", pi[2]);
 
 ////////////////////////////////////////////////////////////////////////////////
 // Initialization of Sigma to a diagonal matrix ////////////////////////////////
 ////////////////////////////////////////////////////////////////////////////////
 
   //// Get initial standard deviations: (max_data - min_data) / 2
-  gsl_vector *stdevs = gsl_vector_alloc(P);
+  /*gsl_vector *stdevs = gsl_vector_alloc(P);
   gsl_vector_memcpy(stdevs, max_data);
   gsl_vector_sub(stdevs, min_data);
-  gsl_vector_scale(stdevs, 2);
+  gsl_vector_scale(stdevs, 0.5);
+  printf("Initial standard deviations: ex.: stdevs[0] = %.1f; stdevs[1] = %.1f\n", gsl_vector_get(stdevs, 0), gsl_vector_get(stdevs, 1));*/
 
   //// Create diagonal matrix
   gsl_matrix *init_sigma = gsl_matrix_alloc(P, P);
-  gsl_matrix_set_all(init_sigma, 0.0);
+  /*gsl_matrix_set_all(init_sigma, 0.0);
   gsl_vector diag_sigma = gsl_matrix_diagonal(init_sigma).vector;
-  gsl_vector_memcpy(&diag_sigma, stdevs);
+  gsl_vector_memcpy(&diag_sigma, stdevs);*/
+  gsl_matrix_set_identity(init_sigma); // Identity matrix
+  gsl_matrix_scale(init_sigma, 10);
 
   //// Initialize sigma
   for (long k=0; k<K; k++){
     gsl_matrix_memcpy(sigma[k], init_sigma);
   }
+  printf("Initialization of sigma to diagonal matrices:\nEx.: sigma[1][0, 0] = %.2f; sigma[1][0, 1] = %.2f\n\n", gsl_matrix_get(sigma[1], 0, 0), gsl_matrix_get(sigma[1], 0, 1));
 
 ////////////////////////////////////////////////////////////////////////////////
 // Random initialization of mu with respect to a multivariate Gaussian distribution
@@ -280,13 +289,14 @@ double em_parallel (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_ma
   for (int k=0; k<K; k++){
     gsl_ran_multivariate_gaussian(r, mu0, init_sigma, mu[k]); // Initialize the mean vectors
   }
+  printf("Initialization of mu to random values:\nEx.: mu[2][0] = %.2f; mu[2][1] = %.2f\n\n", gsl_vector_get(mu[2], 0), gsl_vector_get(mu[2], 1));
 
   //////////////////////////////////////////////////////////////////////////////
 
   // Free memory
   gsl_vector_free(min_data);
   gsl_vector_free(max_data);
-  gsl_vector_free(stdevs);
+  //gsl_vector_free(stdevs);
   gsl_matrix_free(init_sigma);
   gsl_vector_free(mu0);
   gsl_rng_free(r);
@@ -298,6 +308,7 @@ double em_parallel (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_ma
 
   // Compute initial log-likelihood
   double loglik = compute_loglik(data, pi, mu, sigma);
+  printf("Initial log-likelihood = %.3f\n", loglik);
   int stop_iterations = 0; // Set to 1 when convergence is achieved
 
   *run_time_init = omp_get_wtime() - start_time;
@@ -305,15 +316,19 @@ double em_parallel (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_ma
   start_time = omp_get_wtime();
   *niter = 0;
   double new_loglik;
-  while (stop_iterations == 0) {
+  //while (stop_iterations == 0) {
+  for (int iter=0; iter<10; iter++) {
     *niter += 1;
+    printf("EM algorithm: iteration %d\n", *niter);
     new_loglik = iter_em(data, pi, mu, sigma, gamma, loglik); // One iteration of the EM algorithm
-    if (new_loglik - loglik < CONV_CRIT) { // Convergence criterion met
+    /*if (new_loglik - loglik < CONV_CRIT) { // Convergence criterion met
       stop_iterations = 1;
     }
     else {
       loglik = new_loglik;
-    }
+    }*/
+    loglik = new_loglik;
+    printf("Log-likelihood = %.3f\n", loglik);
   }
   *run_time_em = omp_get_wtime() - start_time;
 
@@ -388,6 +403,8 @@ This function computes the minimum and maximum values of the dataset for each va
     gsl_vector_free(partial_min_data[th_id]);
     gsl_vector_free(partial_max_data[th_id]);
   }
+  /*printf("Max value of column 0 = %.1f\n", gsl_vector_get(max_data, 0));
+  printf("Min value of column 0 = %.1f\n", gsl_vector_get(min_data, 0));*/
   return 0;
 }
 
@@ -405,7 +422,12 @@ double iter_em (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_matrix
   double one_over_sum_gamma[K]; // One over the aggregated sum
   gsl_vector *partial_unnormalized_mu[K][NTHREADS]; // Partial sums of (gamma_(n, k) * x_n)
   gsl_matrix *partial_unnormalized_sigma[K][NTHREADS]; // Partial sums of (gamma_(n, k) * (x_n - mu_k) * (x_n - mu_k)^T)
+  gsl_matrix *small_diag_matrix = gsl_matrix_alloc(P, P); // To add to the covariance matrices to avoid getting degenerate matrices
   double partial_loglik[NTHREADS]; // Partial log-likelihood
+
+  // Small diagonal matrix
+  gsl_matrix_set_identity(small_diag_matrix);
+  gsl_matrix_scale(small_diag_matrix, EPSILON);
 
   int th_id; // Thread ID
 
@@ -448,6 +470,9 @@ double iter_em (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_matrix
       for (k = 0; k < K; k++) {
         // Regularization of posterior probabilities
         gamma[n][k] = gamma[n][k] / regul;
+        /*if (n == 0) {
+          printf("Regul = %.20f\n", regul);
+        }*/
 
         // Computation of intermediate results
         sum_gamma[k][th_id] += gamma[n][k]; // Add gamma_(n, k) (see expression of pi and denominators of mu and Sigma in section M-step)
@@ -470,7 +495,15 @@ double iter_em (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_matrix
 
     if (th_id == 0){
 
-      for (k=0; k<K; k++){ // PARALLELIZE THIS TOO?
+      /*printf("Test gamma\n");
+      double test_gamma;
+      for (k=0; k<K; k++) {
+        printf("Gamma[0][%ld] = %.2f\n", k, gamma[0][k]);
+        test_gamma += gamma[0][k];
+      }
+      printf("Sum gamma = %.2f\n", test_gamma);*/
+
+      for (k=0; k<K; k++){
 
         // Aggregation of the intermediate sums
         //// Initialization
@@ -483,6 +516,7 @@ double iter_em (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_matrix
           gsl_vector_add(mu[k], partial_unnormalized_mu[k][t]);
         }
         one_over_sum_gamma[k] = 1 / sum_gamma_aggreg;
+        printf("Cluster %ld: sum gamma = %.10f\n", k, sum_gamma_aggreg);
 
         // Computations of pi and mu
         pi[k] = sum_gamma_aggreg / N;
@@ -541,6 +575,7 @@ double iter_em (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_matrix
 
         // Computation of Sigma
         gsl_matrix_scale(sigma[k], one_over_sum_gamma[k]);
+        gsl_matrix_add(sigma[k], small_diag_matrix);
       }
     }
 
@@ -558,6 +593,7 @@ double iter_em (gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_matrix
 ////////////////////////////////////////////////////////////////////////////////
 
   double new_loglik = compute_loglik(data, pi, mu, sigma);
+  gsl_matrix_free(small_diag_matrix);
 
   return new_loglik;
 }
@@ -586,6 +622,9 @@ double compute_loglik(gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_
 
     for (n = 0; n < N; n++) {
       double res = 0.0;
+      if (n == 0) {
+        printf("Data = (%.3f, %.3f):\n", gsl_vector_get(data[n], 0), gsl_vector_get(data[n], 1));
+      }
       for (k = 0; k < K; k++) {
 
         // Multivariate normal PDF
@@ -595,6 +634,14 @@ double compute_loglik(gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_
 
         // Add pi_k * N(x_n; mu_k, Sigma_k)
         res += pi[k] * *result;
+        if (n == 0) {
+          printf("\tk = %ld:\n", k);
+          printf("\tmu = (%.3f, %.3f)\n\n", gsl_vector_get(mu[k], 0), gsl_vector_get(mu[k], 1));
+          printf("\tsigma = (%.3f, %.3f)\n", gsl_matrix_get(sigma[k], 0, 0), gsl_matrix_get(sigma[k], 0, 1));
+          printf("\t\t(%.3f, %.3f)\n\n", gsl_matrix_get(sigma[k], 1, 0), gsl_matrix_get(sigma[k], 1, 1));
+          printf("\tGaussian pdf = %.20f\n", *result);
+          printf("\tpi = %.3f\n\n", pi[k]);
+        }
 
         // Free memory
         free(result);
@@ -610,7 +657,7 @@ double compute_loglik(gsl_vector *data[N], double pi[K], gsl_vector *mu[K], gsl_
 #pragma omp barrier // Synchronization
 
     if (th_id == 0){
-
+      printf("Partial log-likelihood = %.2f\n\n", partial_loglik[0]);
       // Aggregation over the threads
       for(int t=0; t<NTHREADS; t++){
         loglik += partial_loglik[t];
